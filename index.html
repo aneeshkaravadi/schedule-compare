@@ -36,11 +36,14 @@
     <div id="my-warn" class="warn" aria-live="polite"></div>
 
     <h2>Share it</h2>
-    <p>Send this link to friends. It holds your whole schedule, so only share it with people you trust.</p>
+    <p>Send friends this link, or just the code if the link is too long to text. It holds your whole schedule, so only share it with people you trust.</p>
     <div class="share">
       <input id="share-link" type="text" readonly aria-label="Your share link">
       <button type="button" class="btn primary" id="copy-link">Copy link</button>
+      <button type="button" class="btn" id="copy-code">Copy code only</button>
     </div>
+    <label class="check" for="share-extras"><input type="checkbox" id="share-extras"> Also include class numbers and instructors (longer)</label>
+    <div id="share-len" class="hint"></div>
     <div id="copy-msg" class="msg" aria-live="polite"></div>
   </section>
 
@@ -48,7 +51,7 @@
     <h2>Add a friend</h2>
     <p>Paste the link or code a friend sent you.</p>
     <div class="share">
-      <input id="friend-input" type="text" placeholder="Paste a share link" aria-label="Friend's share link" autocomplete="off">
+      <input id="friend-input" type="text" placeholder="Paste a share link or code" aria-label="Friend's share link" autocomplete="off">
       <button type="button" class="btn primary" id="add-friend">Add</button>
     </div>
     <div id="friend-msg" class="msg" aria-live="polite"></div>

@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   var L = window.Logic, DAYS = L.DAYS, KEY = 'schedule-compare.v1';
-  var state = { me: { name: '', classes: [] }, friends: [] };
+  var state = { me: { name: '', classes: [] }, friends: [], extras: false };
 
   function el(tag, attrs, kids) {
     var n = document.createElement(tag);
@@ -36,6 +36,7 @@
       if (s && s.me && Array.isArray(s.me.classes)) {
         state.me = { name: String(s.me.name || '').slice(0, 40), classes: s.me.classes.slice(0, 20).map(function (c) { return Object.assign(blankClass(), c, { alts: (c.alts || []).map(function (a) { return Object.assign(blankAlt(), a); }) }); }) };
         state.friends = (s.friends || []).map(function (f) { return L.cleanPerson(f); }).filter(Boolean).slice(0, 12);
+        state.extras = !!s.extras;
       }
     } catch (e) {}
   }
@@ -197,23 +198,39 @@
     renderGrid($('my-grid'), [me]);
     var cf = L.conflicts(me.classes);
     $('my-warn').textContent = cf.length ? 'Overlap: ' + cf.map(function (p) { return (me.classes[p[0]].course || 'Class ' + (p[0] + 1)) + ' and ' + (me.classes[p[1]].course || 'Class ' + (p[1] + 1)); }).join('; ') + '.' : '';
-    var base = location.href.split('#')[0];
-    $('share-link').value = me.classes.length ? base + '#s=' + L.encodeShare(me) : '';
+    renderShare(me);
     renderCompare(); save();
   }
-  function copyLink() {
+  var shareToken = 0, shareCode = '';
+  function renderShare(me) {
+    var tok = ++shareToken, link = $('share-link'), len = $('share-len');
+    if (!me.classes.length) { shareCode = ''; link.value = ''; len.textContent = ''; return; }
+    L.encodeShare(me, { extras: state.extras }).then(function (code) {
+      if (tok !== shareToken) return;
+      shareCode = code;
+      link.value = location.href.split('#')[0] + '#s=' + code;
+      len.textContent = 'Link is ' + link.value.length + ' characters. The code alone is ' + code.length + '.';
+    }, function () {
+      if (tok !== shareToken) return;
+      shareCode = ''; link.value = ''; len.textContent = 'This browser cannot build share links.';
+    });
+  }
+  function copyLink(what) {
     var inp = $('share-link'), msg = $('copy-msg');
     if (!inp.value) { msg.textContent = 'Add at least one class first.'; return; }
-    function fallback() { inp.focus(); inp.select(); msg.textContent = 'Press Ctrl+C or Cmd+C to copy.'; }
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(inp.value).then(function () { msg.textContent = 'Copied.'; }, fallback); else fallback();
+    var text = what === 'code' ? shareCode : inp.value;
+    function fallback() { if (what === 'code') inp.value = shareCode; inp.focus(); inp.select(); msg.textContent = 'Press Ctrl+C or Cmd+C to copy.'; }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { msg.textContent = what === 'code' ? 'Copied the code.' : 'Copied the link.'; }, fallback); else fallback();
     clearTimeout(copyT); copyT = setTimeout(function () { msg.textContent = ''; }, 4000);
   }
   function addFriend(text, quiet) {
-    var msg = $('friend-msg'), p = L.decodeShare(text);
-    if (!p || !p.classes.length) { msg.className = 'msg err'; msg.textContent = 'That does not look like a share link. Copy the whole link your friend sent.'; return false; }
-    if (state.friends.length >= 11) { msg.className = 'msg err'; msg.textContent = 'That is the most people this page compares at once.'; return false; }
-    state.friends.push(p); msg.className = 'msg'; msg.textContent = quiet ? '' : 'Added ' + p.name + '.';
-    $('friend-input').value = ''; update(); return true;
+    var msg = $('friend-msg');
+    return L.decodeShare(text).then(function (p) {
+      if (!p || !p.classes.length) { msg.className = 'msg err'; msg.textContent = 'That does not look like a share link or code. Copy everything your friend sent.'; return false; }
+      if (state.friends.length >= 11) { msg.className = 'msg err'; msg.textContent = 'That is the most people this page compares at once.'; return false; }
+      state.friends.push(p); msg.className = 'msg'; msg.textContent = quiet ? '' : 'Added ' + p.name + '.';
+      $('friend-input').value = ''; update(); return true;
+    });
   }
   function showTab(t) {
     var me = t === 'me';
@@ -222,12 +239,14 @@
   }
   function checkIncoming() {
     if (!/[#&]s=/.test(location.hash)) return;
-    var p = L.decodeShare(location.hash);
+    var hash = location.hash;
+    L.decodeShare(hash).then(function (p) { if (p) showBanner(p, hash); });
+  }
+  function showBanner(p, hash) {
     var b = $('banner');
-    if (!p) { return; }
     b.hidden = false; b.innerHTML = '';
     b.appendChild(el('span', { text: 'This link has ' + p.name + '\'s schedule (' + p.classes.length + ' ' + (p.classes.length === 1 ? 'class' : 'classes') + ').' }));
-    b.appendChild(el('button', { type: 'button', class: 'btn primary small', text: 'Add to compare', onclick: function () { if (addFriend(location.hash, true)) { history.replaceState(null, '', location.pathname + location.search); b.hidden = true; showTab('cmp'); } } }));
+    b.appendChild(el('button', { type: 'button', class: 'btn primary small', text: 'Add to compare', onclick: function () { addFriend(hash, true).then(function (ok) { if (ok) { history.replaceState(null, '', location.pathname + location.search); b.hidden = true; showTab('cmp'); } }); } }));
     b.appendChild(el('button', { type: 'button', class: 'btn small', text: 'Dismiss', onclick: function () { history.replaceState(null, '', location.pathname + location.search); b.hidden = true; } }));
   }
 
@@ -236,12 +255,15 @@
     $('my-name').value = state.me.name;
     $('my-name').addEventListener('input', function () { state.me.name = $('my-name').value; update(); });
     $('add-class').addEventListener('click', function () { state.me.classes.push(blankClass()); renderEditor(); update(); var l = $('classes').querySelector('.class:last-child input'); if (l) l.focus(); });
-    $('copy-link').addEventListener('click', copyLink);
+    $('copy-link').addEventListener('click', function () { copyLink('link'); });
+    $('copy-code').addEventListener('click', function () { copyLink('code'); });
+    $('share-extras').checked = state.extras;
+    $('share-extras').addEventListener('change', function () { state.extras = $('share-extras').checked; update(); });
     $('add-friend').addEventListener('click', function () { addFriend($('friend-input').value); });
     $('friend-input').addEventListener('keydown', function (e) { if (e.key === 'Enter') addFriend($('friend-input').value); });
     $('tab-me').addEventListener('click', function () { showTab('me'); });
     $('tab-cmp').addEventListener('click', function () { showTab('cmp'); });
-    $('clear-all').addEventListener('click', function () { try { localStorage.removeItem(KEY); } catch (e) {} state = { me: { name: '', classes: [] }, friends: [] }; $('my-name').value = ''; renderEditor(); update(); });
+    $('clear-all').addEventListener('click', function () { try { localStorage.removeItem(KEY); } catch (e) {} state = { me: { name: '', classes: [] }, friends: [], extras: false }; $('my-name').value = ''; $('share-extras').checked = false; renderEditor(); update(); });
     renderEditor(); update(); checkIncoming();
   }
   init();

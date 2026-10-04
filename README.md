@@ -10,6 +10,10 @@ The Compare tab shows:
 
 No timetable is built in. You enter section numbers and times yourself. Add other sections of a course under a class to widen the swap suggestions.
 
+## Share links
+
+Links use a compact, compressed format (about 300 characters for a full schedule). "Copy code only" gives just the code, and the Compare tab accepts a pasted link or a bare code. Links from the first version of the page still work. A server-free page cannot go much shorter than this, so if you want a tiny link, paste it into a URL shortener.
+
 ## Privacy
 
 There is no server, no account and no analytics. Your schedule is saved in your browser and, when you share, encoded inside the link itself. Anyone with the link can read the schedule, so only send it to people you trust.

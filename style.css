@@ -75,3 +75,6 @@ details.alts summary{cursor:pointer;font-size:14px;color:var(--muted)}
 .empty{color:var(--muted);padding:6px 0}
 footer{margin-top:44px;border-top:2px solid var(--ink);padding-top:12px;color:var(--muted);font-size:14px}
 @media (max-width:520px){h2{margin-top:22px}}
+
+.check{display:flex;align-items:center;gap:8px;font-weight:500;margin:10px 0 0}
+.check input{margin:0}

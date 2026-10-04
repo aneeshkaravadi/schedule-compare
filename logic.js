@@ -79,32 +79,90 @@
     return { name: str(p.name, LIMITS.name) || 'Friend', classes: classes };
   }
 
-  /* ---- share links ---- */
-  function toB64(s) {
-    var b = typeof Buffer !== 'undefined' ? Buffer.from(s, 'utf8').toString('base64')
-      : btoa(unescape(encodeURIComponent(s)));
+  /* ---- share links ----
+     v2 (starts with "z"): compact arrays, deflate-compressed, base64url. About a quarter the size of v1.
+     v1 (starts with "eyJ"): plain base64url JSON. Still decoded so old links keep working. */
+  var MAX_JSON = 20000;
+  function toB64(bytes) {
+    var b = typeof Buffer !== 'undefined' ? Buffer.from(bytes).toString('base64')
+      : btoa(String.fromCharCode.apply(null, Array.prototype.slice.call(bytes)));
     return b.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
   function fromB64(s) {
     s = s.replace(/-/g, '+').replace(/_/g, '/');
     while (s.length % 4) s += '=';
-    return typeof Buffer !== 'undefined' ? Buffer.from(s, 'base64').toString('utf8')
-      : decodeURIComponent(escape(atob(s)));
+    if (typeof Buffer !== 'undefined') return new Uint8Array(Buffer.from(s, 'base64'));
+    var bin = atob(s), out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
   }
-  function encodeShare(person) {
-    return toB64(JSON.stringify({ v: 1, p: cleanPerson(person) }));
+  function utf8(str) { return typeof Buffer !== 'undefined' ? new Uint8Array(Buffer.from(str, 'utf8')) : new TextEncoder().encode(str); }
+  function unutf8(bytes) { return typeof Buffer !== 'undefined' ? Buffer.from(bytes).toString('utf8') : new TextDecoder().decode(bytes); }
+
+  function deflate(bytes) {
+    if (typeof Buffer !== 'undefined') return Promise.resolve(new Uint8Array(require('zlib').deflateRawSync(Buffer.from(bytes), { level: 9 })));
+    if (typeof CompressionStream === 'undefined') return Promise.reject(new Error('no compression'));
+    return new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer().then(function (b) { return new Uint8Array(b); });
   }
-  /* Accepts a full link, "#s=code", "s=code" or the bare code. Returns a clean person or null. */
-  function decodeShare(text) {
+  function inflate(bytes) {
+    if (typeof Buffer !== 'undefined') {
+      try { return Promise.resolve(new Uint8Array(require('zlib').inflateRawSync(Buffer.from(bytes), { maxOutputLength: MAX_JSON }))); } catch (e) { return Promise.reject(e); }
+    }
+    if (typeof DecompressionStream === 'undefined') return Promise.reject(new Error('no decompression'));
+    var reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader(), chunks = [], total = 0;
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) { var out = new Uint8Array(total), o = 0; chunks.forEach(function (c) { out.set(c, o); o += c.length; }); return out; }
+        total += r.value.length;
+        if (total > MAX_JSON) { reader.cancel(); throw new Error('too big'); }
+        chunks.push(r.value); return pump();
+      });
+    }
+    return pump();
+  }
+
+  function dayMask(days) { return days.reduce(function (a, d) { return a | (1 << d); }, 0); }
+  function maskDays(m) { var o = []; for (var i = 0; i < 5; i++) if (m & (1 << i)) o.push(i); return o; }
+  function trim(arr) { while (arr.length && (arr[arr.length - 1] === '' || arr[arr.length - 1] == null || (Array.isArray(arr[arr.length - 1]) && !arr[arr.length - 1].length))) arr.pop(); return arr; }
+
+  /* opts.extras: also include class numbers and instructors (longer). Room, days and times are always included. */
+  function compact(person, extras) {
+    var p = cleanPerson(person);
+    return [p.name, p.classes.map(function (c) {
+      var alts = c.alts.map(function (a) { return trim([a.section, dayMask(a.days), a.start, a.end, a.room, extras ? a.nbr : '']); });
+      return trim([c.course, c.section, dayMask(c.days), c.start, c.end, c.room, extras ? c.nbr : '', extras ? c.instructor : '', alts]);
+    })];
+  }
+  function expand(arr) {
+    if (!Array.isArray(arr) || !Array.isArray(arr[1])) return null;
+    return cleanPerson({ name: arr[0], classes: arr[1].map(function (r) {
+      if (!Array.isArray(r)) return null;
+      return { course: r[0], section: r[1], days: maskDays(r[2] | 0), start: r[3], end: r[4], room: r[5], nbr: r[6], instructor: r[7],
+        alts: (Array.isArray(r[8]) ? r[8] : []).map(function (a) { return Array.isArray(a) ? { course: r[0], section: a[0], days: maskDays(a[1] | 0), start: a[2], end: a[3], room: a[4], nbr: a[5] } : null; }).filter(Boolean) };
+    }).filter(Boolean) });
+  }
+
+  function encodeShare(person, opts) {
+    var json = JSON.stringify(compact(person, !!(opts && opts.extras)));
+    return deflate(utf8(json)).then(function (d) { return 'z' + toB64(d); });
+  }
+  function extractCode(text) {
     if (typeof text !== 'string') return null;
     var t = text.trim();
     var m = t.match(/[#?&]s=([A-Za-z0-9_-]+)/) || t.match(/^s=([A-Za-z0-9_-]+)$/);
-    var code = m ? m[1] : (/^[A-Za-z0-9_-]+$/.test(t) ? t : null);
-    if (!code) return null;
+    return m ? m[1] : (/^[A-Za-z0-9_-]+$/.test(t) ? t : null);
+  }
+  /* Accepts a full link, "#s=code", "s=code" or the bare code. Resolves to a clean person, or null. */
+  function decodeShare(text) {
+    var code = extractCode(text);
+    if (!code) return Promise.resolve(null);
     try {
-      var o = JSON.parse(fromB64(code));
-      return o && o.v === 1 ? cleanPerson(o.p) : null;
-    } catch (e) { return null; }
+      if (code[0] === 'z') {
+        return inflate(fromB64(code.slice(1))).then(function (b) { return expand(JSON.parse(unutf8(b))); }, function () { return null; }).catch(function () { return null; });
+      }
+      var o = JSON.parse(unutf8(fromB64(code)));
+      return Promise.resolve(o && o.v === 1 ? cleanPerson(o.p) : null);
+    } catch (e) { return Promise.resolve(null); }
   }
 
   /* ---- comparing ---- */
